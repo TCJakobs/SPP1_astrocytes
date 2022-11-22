@@ -1,0 +1,21 @@
+function [result] = cIOP(my_list, days)
+% Function cIOP calculates cummulative IOP as area under the curve IOP vs
+% days. 
+% Params:   [array of double] lists of IOP measurements in mmHg
+%           [array of ints] list of days
+% Returns:  [double] cummulative IOP in mmHg*days
+
+    [rows, cols] = size(my_list);
+    
+    if rows ~= size(days, 1)
+        error("Number of rows must match number of days.");
+        
+    else   
+        result = zeros(cols, 1);
+
+        for i=1: cols
+            result(i, 1) = trapz(days, my_list(:, i));
+        end
+        
+    end 
+end

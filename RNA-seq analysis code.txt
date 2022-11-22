@@ -1,0 +1,420 @@
+# Data is uploaded to a Computer Cluster, in our case the O2 cluster of Harvard University, using FileZilla. 
+
+# 1. Login to your computer cluster and FileZilla.
+# 2. Start an interactive session on the cluster
+$ srun --pty -p interactive -t 0-12:00 --mem 64G /bin/bash
+# 3. Create a project directory: rnaseq
+ $ mkdir -p rnaseq/logs rnaseq/meta rnaseq/raw_data rnaseq/results rnaseq/scripts
+# 4. Data transfer: Upload the .fq files from local hard drive to your home drive on the cluster.  
+
+# Quality control of FASTQ files with FastQC.
+# Load the FastQC module.
+$ module load fastqc/0.11.3
+$ fastqc *.fq
+# Create a “fastqc” directory and move results there
+$ mkdir ~/rnaseq/results/fastqc
+$ mv *fastqc* ~/rnaseq/results/fastqc/
+# Results are in HTML format 
+
+# Transcriptome Mapping
+# Create a new directory for the Salmon output.
+$ mkdir ~/rnaseq/results/salmon
+$ cd ~/rnaseq/results/salmon
+# Open the .bashrc file using vim. The content of the .bashrc file will depend on the cluster and your user 
+# settings. See below for a sample .bashrc file.
+$ vim ~/.bashrc
+# At the end of the file, add the export command that adds a specific location to the list in $PATH. type in the 
+# following:
+export PATH=/n/app/bcbio/tools/bin:$PATH
+# Exit vim
+# Re-read the .bashrc file using the source command.
+$ source ~/.bashrc
+$ echo $PATH
+
+# Download reference transcript sequences for mouse obtained from the Ensembl ftp site.
+$ mkdir ~/rnaseq/results/salmon/reference_data
+$ cd ~/rnaseq/results/salmon/reference_data
+
+# Download Mouse reference in /reference_data.
+$ wget ftp://ftp.ensembl.org/pub/release-100/fasta/mus_musculus/cdna/Mus_musculus.GRCm38.cdna.all.fa.gz
+
+# Unzip the FASTA file
+$ gzip -d Mus_musculus.GRCm38.cdna.all.fa.gz
+
+# Create the transcriptome index using salmon index.
+$ salmon index -t Mus_musculus.GRCm38.cdna.all.fa -i salmon_index -k 31
+
+# Quantify reads using salmon
+$ mkdir ~/rnaseq/results/salmon/quant_data
+$ cd ~/rnaseq/results/salmon/quant_data
+# Quantification sample (in this case the sample name is A1) for paired-end data: -1, -2
+$ salmon quant -i /home/sl532/rnaseq/results/salmon/reference_data/salmon_index \
+-l A \
+      -1 ~/rnaseq/raw_data/A1_CRRA200016832-1a_H5T5HDSXY_L1_1.fq \
+      -2 ~/rnaseq/raw_data/A1_CRRA200016832-1a_H5T5HDSXY_L1_2.fq \
+      -o A1_quant \
+--useVBOpt \
+--seqBias \
+--validateMappings
+# Use the same methods to quantify reads for other samples.
+
+# Align data with STAR
+# Use mem 64GB.
+$ srun --pty -p interactive -t 0-12:00 --mem 64G /bin/bash
+# Load the star module.
+$ module load gcc/6.2.0 star/2.7.0a
+# Create an output directory for alignment files.
+$ cd ~/rnaseq/raw_data
+$ mkdir ../rnaseq/results/STAR
+$ cd ~/rnaseq/results/STAR
+
+# Find a GRCm38 STAR index in your database. In our case this is located in:
+/n/groups/shared_databases/igenome/Mus_musculus/NCBI/GRCm38/Sequence/starIndex/
+
+# Aligning reads for paired-end data with STAR.
+$ STAR --genomeDir /n/groups/shared_databases/igenome/Mus_musculus/NCBI/GRCm38/Sequence/starIndex/ 
+--runThreadN 12 --readFilesIn ~/rnaseq/raw_data/A1_CRRA200016832-1a_H5T5HDSXY_L1_1.fq ~/rnaseq/raw_data/A1_CRRA200016832-1a_H5T5HDSXY_L1_2.fq --outFileNamePrefix ~/rnaseq/results/STAR/A1 --outSAMtype BAM SortedByCoordinate --outSAMunmapped Within --outSAMattributes Standard 
+
+# Assessing alignment quality using Qualimap
+$ cd ~/rnaseq
+$ mkdir -p results/qualimap 
+# Run the unset DISPLAY command to open a GUI to run Qualimap
+$ unset DISPLAY
+# Add the location of the Qualimap tool to PATH variable.
+$ export PATH=/n/app/bcbio/dev/anaconda/bin:$PATH 
+# Run Qualimap with rnaseq tool on our aligned data.
+$ qualimap rnaseq \
+-outdir ~/rnaseq/results/qualimap/A2 \
+-a proportional \
+-bam ~/rnaseq/results/STAR/A2Aligned.sortedByCoord.out.bam \
+-p strand-specific-reverse \
+-gtf /home/sl532/rnaseq/results/STAR/Mus_musculus.GRCm38.100.gtf \
+--java-mem-size=32G
+# The align assessment is in HTML format.
+  
+# Documenting results and gathering QC metrics with MultiQC
+# Tracking and aggregating results from workflow tools with MultiQC
+$ mkdir ~/rnaseq/results/multiqc_report
+$ cd ~/rnaseq/results/multiqc_report
+$ module load gcc/6.2.0 python/2.7.12 multiqc/1.5
+$ multiqc –n \multiqc_report_rnaseq/home/sl532/rnaseq/results/fastqc/*zip/home/sl532/rnaseq/results/STAR/*Log.final.out/home/sl532/rnaseq/results/qualimap/*/home/sl532/rnaseq/results/salmon/quant_data/*_quant
+
+
+
+# In Rstudio:
+
+#Create a new project and three new directories in the working directory: data, meta, and results
+# Go to the File menu and create a new R script (in this case called de_script.R
+# Install packages 
+# Install from CRAN: Install the below packages on your laptop from CRAN (Rstudio---Tools—Install Package).
+install.packages(“RColorBrewer”)
+install. packages(“pheatmap”)
+install.packages(“ggrepel”)
+install.packages(“devtools”)
+install.packages(“cowplot”)
+install.packages(“BiocManager”)
+install.packages("tidyverse")
+
+# Install from Bioconductor: Install the below packages from Bioconductor.
+BiocManager::install(“DESeq2”)
+BiocManager::install(“clusterProfiler”)
+BiocManager::install(“DOSE”)
+BiocManager::install(“AnnotationDbi”)
+BiocManager::install(“org.Hs.eg.db”)
+BiocManager::install(“pathview”)
+BiocManager::install(“DEGreport”)
+BiocManager::install(“AnnotationHub”)
+BiocManager::install(“tximport”)
+BiocManager::install(“ensembldb”)
+BiocManager::install(“EnsDb.Hsapiens.v86”)
+
+# Load libraries.
+library(DESeq2)
+library(tidyverse)
+library(RColorBrewer)
+library(pheatmap)
+library(DEGreport)
+library(tximport)
+library(ggplot2)
+library(ggrepel)
+library(dplyr)    
+library(magrittr)
+
+# Transfer the salmon folder from the cluster to the local machine via Filezilla and identify the files
+dirs <- list.files("D:/Project/Results/RNA-sequence/Cultured Astrocytes_C57 and SPP1 KO-RNA sequecing_5-28-2020/Results/salmon/")
+files <- list.files("D:/Project/Results/RNA-sequence/Cultured Astrocytes_C57 and SPP1 KO-RNA sequecing_5-28-2020/Results/salmon/",pattern="quant.sf",recursive = TRUE,full.names = TRUE) 
+names(files) <- dirs.
+
+# Load the annotation files.
+tx2gene <- read.delim("table.txt")
+tx2gene %>% View()
+names(tx2gene) <- c("Transcrip ID", "Gene ID", "Gene name")
+head(tx2gene)
+write.csv(tx2gene,file="tx2gene",row.names = TRUE,quote=TRUE)
+The tx2gene.csv file is saved.
+
+# Run tximport
+tximport(files, type="salmon", tx2gene=tx2gene[ , c("Transcrip ID", "Gene ID")], countsFromAbundance="lengthScaledTPM")
+txi$counts %>% View()
+data <- txi$counts %>% 
+  round() %>% 
+  data.frame()
+  data
+
+# Write date and create metadata
+write.csv(data,file="data.csv",row.names = TRUE,quote=TRUE)
+sampletype <- factor(c(rep("wt",4), rep("SPP1 KO", 4)))
+meta <- data.frame(sampletype, row.names = colnames(txi$counts))
+
+# RNA-seq count distribution
+ggplot(data) +
+   geom_histogram(aes(x = A1_quant), stat = "bin", bins = 200) +
+   xlab("Raw expression counts") +
+   ylab("Number of genes")
+
+# Plot mean versus variance
+mean_counts <- apply(data[,1:4], 1, mean)         
+variance_counts <- apply(data[,5:8], 1, var)
+df <- data.frame(mean_counts, variance_counts)
+
+ggplot(df) +
+   geom_point(aes(x=mean_counts, y=variance_counts)) + 
+   scale_y_log10(limits = c(1,1e9)) +
+   scale_x_log10(limits = c(1,1e9)) +
+   geom_abline(intercept = 0, slope = 1, color="red")
+
+# For SPP1 KO replicates:
+mean_counts <- apply(data[,5:8], 1, mean)         
+variance_counts <- apply(data[,5:8], 1, var)
+df <- data.frame(mean_counts, variance_counts)
+
+ggplot(df) +
+   geom_point(aes(x=mean_counts, y=variance_counts)) + 
+   scale_y_log10(limits = c(1,1e9)) +
+   scale_x_log10(limits = c(1,1e9)) +
+   geom_abline(intercept = 0, slope = 1, color="red")
+
+# Count normalization of dataset using DESeq2
+# Match the metadata and counts data
+all(colnames(txi$counts) %in% rownames(meta))
+all(colnames(txi$counts) == rownames(meta))
+# Create DESeq2 object
+dds <- DESeqDataSetFromTximport(txi, colData = meta, design = ~ sampletype)
+# Check original count matrix we would use counts() function.
+View(counts(dds))
+# Generate the normalized counts.
+# Use estimateSizeFactors() function to  generate size factors.
+   dds <- estimateSizeFactors(dds)
+ # Look at the normalization factor.
+ sizeFactors(dds)
+ # To retrieve normalized counts matrix from dds, use counts() with the argument normalized=TRUE.
+normalized_counts <- counts(dds, normalized=TRUE)
+View(normalized_counts) 
+# Save this normalized data matrix to file for later use.
+write.table(normalized_counts, file="data/normalized_counts.txt", sep="\t", quote=F, col.names=NA)
+
+# Evaluating quality of samples using Principal Components Analysis
+# Transform normalized counts using the rlog() for data visualization
+rld <- rlog(dds, blind=TRUE)
+# Principal components analysis (PCA)
+# The function plotPCA() requires two argumentst: an rlog object and the intgroup (the column in metadata
+plotPCA(rld, intgroup="sampletype")
+# Plot dispersion estimates
+plotDispEsts(dds)
+# Hierarchical Clustering
+rld_mat <- assay(rld)
+rld_cor <- cor(rld_mat)
+# Load pheatmap package
+library(pheatmap)
+# Plot heatmap
+pheatmap(rld_cor, annotation = meta)
+
+
+# Differential expression analysis with DESeq2
+contrast_oe <- c("sampletype", "SPP1 KO", "wt")
+dds <- DESeq(dds)
+res_tableOE <- results(dds, contrast=contrast_oe, alpha = 0.05)
+res_tableOE
+# Results exploration
+class(res_tableOE)
+mcols(res_tableOE, use.names=T)
+res_tableOE %>% data.frame() %>% View()
+# Shrunken log2 foldchanges (LFC)
+# The log2 foldchanges would be the same as those calculated by:
+log2 (normalized_counts_group1 / normalized_counts_group2)
+# Save the unshrunken results
+res_tableOE_unshrunken <- res_tableOE
+
+# Apply fold change shrinkage
+BiocManager::install("apeglm")
+res_tableOE <- lfcShrink(dds, coef, contrast=contrast_oe, res=res_tableOE, type = "apeglm")
+res_tableOE <- lfcShrink(dds, contrast=contrast_oe, res=res_tableOE)
+Error in lfcShrink(dds, contrast = contrast_oe, res = res_tableOE) : 
+  type='apeglm' shrinkage only for use with 'coef'
+
+# MA Plot
+# Start with the unshrunken results
+plotMA(res_tableOE_unshrunken, ylim=c(-2,2))
+# Now the shrunken results: (wrong)
+plotMA(res_tableOE, ylim=c(-2,2))
+# Summarizing results
+summary(res_tableOE, alpha = 0.05)
+# Output significant differentially expressed genes.
+padj.cutoff <- 0.05
+library("dplyr")
+library("tibble")
+res_tableOE_tb <- res_tableOE %>%
+  data.frame() %>%
+  rownames_to_column(var="gene") %>% 
+  as_tibble()
+sigOE <- res_tableOE_tb %>%
+        filter(padj < padj.cutoff)
+write.csv(sigOE, file = "sigOE")
+
+# Check differentially expressed genes in the SPP1 KO compared to wt.
+sigOE
+# Add gene name for sigOE, called sigOE_gene
+sigOE_gene<- merge(sigOE, grcm38annot, by.x="gene", by.y="Gene ID")
+write.csv(sigOE_gene, file = "sigOE_gene")
+# Adding a fold change threshold: such as 0.58
+lfc.cutoff <- 0.58
+sigOE_0.58 <- res_tableOE_tb %>% filter(padj < padj.cutoff & abs(log2FoldChange) > lfc.cutoff)
+sigOE_0.58
+# Add gene name for sigOE_0.58, called sigOE_0.58_gene
+sigOE_0.58_gene<- merge(sigOE_0.58, grcm38annot, by.x="gene", by.y="Gene ID")
+write.csv(sigOE_0.58_gene, file = "sigOE_0.58_gene")
+# An alternative approach to add the fold change threshold: results() function + lfcThrehsold argument.
+results(dds, contrast = contrast_oe, alpha = 0.05, lfcThreshold = 0.58)
+
+# Visualize the results
+# Create a metadata tibble from the data frame (don’t lose the row names)
+astrocytes_meta <- meta %>% 
+              rownames_to_column(var="samplename") %>% 
+              as_tibble()
+# Bbring in a column with gene symbols to the normalized_counts objects
+# DESeq2 creates a matrix when you use the counts() function
+normalized_counts <- counts(dds, normalized=T) %>% 
+                     data.frame() %>%
+                     rownames_to_column(var="gene") 
+  
+# Merge (ensembl IDs) the normalized counts data frame with a subset of the annotations in the tx2gene data # frame (only the columns for ensembl gene IDs and gene symbols)
+grcm38annot <- tx2gene %>% 
+               dplyr::select(2:3) %>% 
+               dplyr::distinct()
+normalized_counts <- merge(normalized_counts, grcm38annot, by.x="gene", by.y="Gene ID")
+normalized_counts <- normalized_counts %>%
+                     as_tibble()
+  
+# Plotting significant DE genes (example)
+grcm38annot[grcm38annot$"Gene name" == "Trdd1", "Gene ID"]
+# Plot expression for single gene
+plotCounts(dds, gene="ENSMUSG00000096749.2", intgroup="sampletype") 
+
+# Using ggplot2 to plot multiple genes (e.g. top 20)
+# Order results by padj values
+top20_sigOE_genes <- res_tableOE_tb %>% 
+        arrange(padj) %>% 	
+        pull(gene) %>% 		
+        head(n=20)		
+
+top20_sigOE_norm <- normalized_counts %>%
+        filter(gene %in% top20_sigOE_genes)					
+
+# Gathering the columns to have normalized counts to a single column
+gathered_top20_sigOE <- top20_sigOE_norm %>%
+  gather(colnames(top20_sigOE_norm)[2:9], key = "samplename", value = "normalized_counts")
+
+# Color by sample group
+gathered_top20_sigOE <- inner_join(astrocytes_meta, gathered_top20_sigOE)
+View(gathered_top20_sigOE)
+
+# Plot using ggplot2.	
+ggplot(gathered_top20_sigOE) +
+        geom_point(aes(x = gene, y = normalized_counts, color = sampletype)) +
+        scale_y_log10() +
+        xlab("Genes") +
+        ylab("log10 Normalized Counts") +
+        ggtitle("Top 20 Significant DE Genes") +
+        theme_bw() +
+	theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+	theme(plot.title = element_text(hjust = 0.5))
+
+
+# Heatmap
+# Extract normalized expression for significant genes from the KO and wt samples (2:5 and 6:9)
+norm_OEsig <- normalized_counts[,c(1:5,6:9)] %>% 
+              filter(gene %in% sigOE$gene)  
+# Set color palette
+install.packages("RColorBrewer")
+library("RColorBrewer")
+heat_colors <- brewer.pal(6, "YlOrRd")
+# Run pheatmap using the metadata data frame for the annotation
+pheatmap(norm_OEsig[2:9], 
+    color = heat_colors, 
+    cluster_rows = T, 
+    show_rownames = F,
+    annotation = meta, 
+    border_color = NA, 
+    fontsize = 10, 
+    scale = "row", 
+    fontsize_row = 10, 
+    height = 20)
+
+# Volcano plot
+# Obtain logical vector where TRUE values denote padj values < 0.05 and fold change > 1.5 in either direction
+res_tableOE_tb <- res_tableOE_tb %>% 
+                  mutate(threshold_OE = padj < 0.05 & abs(log2FoldChange) >= 0.58)
+ggplot(res_tableOE_tb) +
+    geom_point(aes(x = log2FoldChange, y = -log10(padj), colour = threshold_OE)) +
+    ggtitle("SPP1 KO") +
+    xlab("log2 fold change") + 
+    ylab("-log10 adjusted p-value") +
+    #scale_y_continuous(limits = c(0,50)) +
+    theme(legend.position = "none",
+          plot.title = element_text(size = rel(1.5), hjust = 0.5),
+          axis.title = element_text(size = rel(1.25))) 
+
+# Plot  top 10 genes (lowest padj) in our DE list using geom_text_repel().
+# Add all the gene symbols as a column from the grch38 table using bind_cols()
+res_tableOE_tb <- bind_cols(res_tableOE_tb, "Gene name"=grcm38annot$"Gene name"[match(res_tableOE_tb$gene, grcm38annot$"Gene ID")])
+# Create an empty column to indicate which genes to label
+res_tableOE_tb <- res_tableOE_tb %>% mutate(genelabels = "")
+# Sort by padj values 
+res_tableOE_tb <- res_tableOE_tb %>% arrange(padj)
+res_tableOE_tb$genelabels[1:10] <- as.character(res_tableOE_tb$"Gene name" [1:10])
+
+ggplot(res_tableOE_tb, aes(x = log2FoldChange, y = -log10(padj))) +
+    geom_point(aes(colour = threshold_OE)) +
+    geom_text_repel(aes(label = genelabels)) +
+    ggtitle("SPP1 KO") +
+    xlab("log2 fold change") + 
+    ylab("-log10 adjusted p-value") +
+    theme(legend.position = "none",
+          plot.title = element_text(size = rel(1.5), hjust = 0.5),
+          axis.title = element_text(size = rel(1.25))) 
+
+
+
+
+
+
+
+
+# Content of .bashrc
+
+# .bashrc
+# Source global definitions
+if [ -f /etc/bashrc ]; then
+        . /etc/bashrc
+fi
+# Uncomment the following line if you don't like systemctl's auto-paging feature:
+# export SYSTEMD_PAGER=
+# User specific aliases and functions
+export PATH=/n/app/bcbio/tools/bin:$PATH
+## export DUO_PASSCODE=sms
+
+
+
+
+# EOF
+
